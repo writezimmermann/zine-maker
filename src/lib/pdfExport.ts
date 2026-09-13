@@ -15,6 +15,7 @@ import {
 import type { ImpositionPlan, ImpositionSlot } from "./imposition";
 import type { PageTransform, ZinePage } from "../types";
 import { getImage } from "./db";
+import { orientationToRotation, readJpegOrientation } from "./exif";
 
 const MM_TO_PT = 2.8346456693;
 const A5_WIDTH = 148 * MM_TO_PT;
@@ -59,6 +60,17 @@ function rotatedOrigin(
   }
 }
 
+/**
+ * pdf-lib (and the underlying PDF rotation matrix) rotates COUNTER-clockwise
+ * for a positive angle, but our rotation values everywhere else (the
+ * on-screen CSS preview, the manual rotate button, EXIF orientation) are
+ * expressed as CLOCKWISE degrees, since that's the intuitive convention.
+ * This converts a clockwise angle to the equivalent value pdf-lib expects.
+ */
+function cwToPdfRotation(cwDegrees: number): 0 | 90 | 180 | 270 {
+  return (((360 - cwDegrees) % 360) as 0 | 90 | 180 | 270);
+}
+
 function drawImageInSlot(
   page: PDFPage,
   image: PDFImage,
@@ -66,12 +78,16 @@ function drawImageInSlot(
   slotY: number,
   transform: PageTransform,
   extraRotate180: boolean,
+  exifRotationCw: 0 | 90 | 180 | 270,
 ) {
-  const totalRotation = ((transform.rotation + (extraRotate180 ? 180 : 0)) % 360) as
-    | 0
-    | 90
-    | 180
-    | 270;
+  // All rotation sources combined, expressed clockwise: the manual
+  // rotate-button value the user set, the EXIF orientation correction
+  // (so sideways phone photos print upright), and the saddle-stitch
+  // imposition's own 180 flip for Side B pages.
+  const totalCwRotation = ((transform.rotation +
+    exifRotationCw +
+    (extraRotate180 ? 180 : 0)) %
+    360) as 0 | 90 | 180 | 270;
 
   const imgDims = image.scale(1);
   // Available whitespace-inset area the image must fit fully inside (no cropping).
@@ -79,7 +95,7 @@ function drawImageInSlot(
   const availH = A5_HEIGHT - IMAGE_MARGIN * 2;
   // If the image is rotated a quarter turn, its effective footprint swaps
   // width/height for the purposes of fitting it in the available area.
-  const rotatedQuarter = totalRotation === 90 || totalRotation === 270;
+  const rotatedQuarter = totalCwRotation === 90 || totalCwRotation === 270;
   const effW = rotatedQuarter ? imgDims.height : imgDims.width;
   const effH = rotatedQuarter ? imgDims.width : imgDims.height;
 
@@ -95,7 +111,8 @@ function drawImageInSlot(
   const targetX = centerX - drawWidth / 2;
   const targetY = centerY - drawHeight / 2;
 
-  const { x, y } = rotatedOrigin(targetX, targetY, drawWidth, drawHeight, totalRotation);
+  const pdfRotation = cwToPdfRotation(totalCwRotation);
+  const { x, y } = rotatedOrigin(targetX, targetY, drawWidth, drawHeight, pdfRotation);
 
   page.drawRectangle({
     x: slotX,
@@ -122,7 +139,7 @@ function drawImageInSlot(
     y,
     width: drawWidth,
     height: drawHeight,
-    rotate: degrees(totalRotation),
+    rotate: degrees(pdfRotation),
   });
 
   page.pushOperators(popGraphicsState());
@@ -195,7 +212,17 @@ async function buildSideDocument(
       const blob = await getImage(zinePage.imageId);
       if (!blob) continue;
       const image = await embedImageForBlob(doc, blob);
-      drawImageInSlot(page, image, x, 0, zinePage.transform, slot.rotate180);
+      const orientation = await readJpegOrientation(blob);
+      const { rotationCw } = orientationToRotation(orientation);
+      drawImageInSlot(
+        page,
+        image,
+        x,
+        0,
+        zinePage.transform,
+        slot.rotate180,
+        rotationCw,
+      );
     }
   }
 
