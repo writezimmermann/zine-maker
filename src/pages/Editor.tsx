@@ -37,14 +37,23 @@ function PageFrame({
 
   const t = page.transform;
 
+  // Match the PDF export's "contain within a whitespace margin" fit so the
+  // preview looks like the printed page: nothing is ever cropped.
+  const MARGIN_RATIO_W = 10 / 148;
+  const MARGIN_RATIO_H = 10 / 210;
+
   let imgStyle: React.CSSProperties = {};
   if (imageUrl && naturalSize && frameRef.current) {
     const frameW = frameRef.current.clientWidth;
     const frameH = frameRef.current.clientHeight;
-    const coverScale =
-      Math.max(frameW / naturalSize.w, frameH / naturalSize.h) * t.scale;
-    const drawW = naturalSize.w * coverScale;
-    const drawH = naturalSize.h * coverScale;
+    const availW = frameW * (1 - 2 * MARGIN_RATIO_W);
+    const availH = frameH * (1 - 2 * MARGIN_RATIO_H);
+    const rotatedQuarter = t.rotation === 90 || t.rotation === 270;
+    const effW = rotatedQuarter ? naturalSize.h : naturalSize.w;
+    const effH = rotatedQuarter ? naturalSize.w : naturalSize.h;
+    const containScale = Math.min(availW / effW, availH / effH) * t.scale;
+    const drawW = naturalSize.w * containScale;
+    const drawH = naturalSize.h * containScale;
     const centerX = frameW * t.offsetX;
     const centerY = frameH * t.offsetY;
     imgStyle = {

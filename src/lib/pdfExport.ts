@@ -23,6 +23,9 @@ const A4_WIDTH = A5_WIDTH * 2;
 const A4_HEIGHT = A5_HEIGHT;
 const CROP_MARK_LEN = 3 * MM_TO_PT;
 const CROP_MARK_OFFSET = 1.5 * MM_TO_PT;
+/** Whitespace margin kept around every image so nothing is cropped. */
+const IMAGE_MARGIN_MM = 10;
+const IMAGE_MARGIN = IMAGE_MARGIN_MM * MM_TO_PT;
 
 async function embedImageForBlob(doc: PDFDocument, blob: Blob): Promise<PDFImage> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -71,11 +74,19 @@ function drawImageInSlot(
     | 270;
 
   const imgDims = image.scale(1);
-  const coverScale =
-    Math.max(A5_WIDTH / imgDims.width, A5_HEIGHT / imgDims.height) *
-    transform.scale;
-  const drawWidth = imgDims.width * coverScale;
-  const drawHeight = imgDims.height * coverScale;
+  // Available whitespace-inset area the image must fit fully inside (no cropping).
+  const availW = A5_WIDTH - IMAGE_MARGIN * 2;
+  const availH = A5_HEIGHT - IMAGE_MARGIN * 2;
+  // If the image is rotated a quarter turn, its effective footprint swaps
+  // width/height for the purposes of fitting it in the available area.
+  const rotatedQuarter = totalRotation === 90 || totalRotation === 270;
+  const effW = rotatedQuarter ? imgDims.height : imgDims.width;
+  const effH = rotatedQuarter ? imgDims.width : imgDims.height;
+
+  const containScale =
+    Math.min(availW / effW, availH / effH) * transform.scale;
+  const drawWidth = imgDims.width * containScale;
+  const drawHeight = imgDims.height * containScale;
 
   // center of the image within the slot, based on normalized offset (0..1, 0.5 = centered)
   const centerX = slotX + A5_WIDTH * transform.offsetX;
@@ -91,11 +102,11 @@ function drawImageInSlot(
     y: slotY,
     width: A5_WIDTH,
     height: A5_HEIGHT,
-    color: rgb(0.95, 0.95, 0.95),
+    color: rgb(1, 1, 1),
   });
 
-  // Clip to the slot rectangle before drawing the image so overflow from
-  // scale/offset is hidden rather than bleeding into the neighboring slot.
+  // Clip to the slot rectangle so nothing (even at extreme manual scale/
+  // offset adjustments) bleeds into the neighboring slot.
   page.pushOperators(
     pushGraphicsState(),
     moveTo(slotX, slotY),

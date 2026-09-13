@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Personal photos dropped in for local testing — never commit these to a public repo
+/content/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
