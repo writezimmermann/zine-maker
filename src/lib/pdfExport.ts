@@ -15,7 +15,6 @@ import {
 import type { ImpositionPlan, ImpositionSlot } from "./imposition";
 import type { PageTransform, ZinePage } from "../types";
 import { getImage } from "./db";
-import { orientationToRotation, readJpegOrientation } from "./exif";
 
 const MM_TO_PT = 2.8346456693;
 const A5_WIDTH = 148 * MM_TO_PT;
@@ -78,15 +77,13 @@ function drawImageInSlot(
   slotY: number,
   transform: PageTransform,
   extraRotate180: boolean,
-  exifRotationCw: 0 | 90 | 180 | 270,
 ) {
   // All rotation sources combined, expressed clockwise: the manual
-  // rotate-button value the user set, the EXIF orientation correction
-  // (so sideways phone photos print upright), and the saddle-stitch
-  // imposition's own 180 flip for Side B pages.
-  const totalCwRotation = ((transform.rotation +
-    exifRotationCw +
-    (extraRotate180 ? 180 : 0)) %
+  // rotate-button value the user set, and the saddle-stitch imposition's
+  // own 180 flip for Side B pages. (Images are normalized to correct,
+  // EXIF-free orientation at upload time — see lib/normalizeImage.ts —
+  // so no separate EXIF-based rotation is needed here.)
+  const totalCwRotation = ((transform.rotation + (extraRotate180 ? 180 : 0)) %
     360) as 0 | 90 | 180 | 270;
 
   const imgDims = image.scale(1);
@@ -212,17 +209,7 @@ async function buildSideDocument(
       const blob = await getImage(zinePage.imageId);
       if (!blob) continue;
       const image = await embedImageForBlob(doc, blob);
-      const orientation = await readJpegOrientation(blob);
-      const { rotationCw } = orientationToRotation(orientation);
-      drawImageInSlot(
-        page,
-        image,
-        x,
-        0,
-        zinePage.transform,
-        slot.rotate180,
-        rotationCw,
-      );
+      drawImageInSlot(page, image, x, 0, zinePage.transform, slot.rotate180);
     }
   }
 

@@ -4,6 +4,7 @@ import { getImage, getZine, saveImage, saveZine } from "../lib/db";
 import uuid from "../lib/id";
 import { computeImposition, type FlipMethod } from "../lib/imposition";
 import { exportZinePdfs } from "../lib/pdfExport";
+import { normalizeImageOrientation } from "../lib/normalizeImage";
 
 interface Props {
   zineId: string;
@@ -225,8 +226,9 @@ export default function Editor({ zineId, onBack }: Props) {
   async function handleFile(pageNumber: number, file: File) {
     if (!zine) return;
     const imageId = uuid();
-    await saveImage(imageId, file);
-    const url = URL.createObjectURL(file);
+    const normalized = await normalizeImageOrientation(file);
+    await saveImage(imageId, normalized);
+    const url = URL.createObjectURL(normalized);
     setImageUrls((m) => ({ ...m, [imageId]: url }));
     const nextPages = zine.pages.map((p) =>
       p.pageNumber === pageNumber ? { ...p, imageId } : p,
