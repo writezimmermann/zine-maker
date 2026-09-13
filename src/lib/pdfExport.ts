@@ -1,0 +1,219 @@
+import {
+  PDFDocument,
+  PDFImage,
+  PDFPage,
+  degrees,
+  rgb,
+  clip,
+  endPath,
+  popGraphicsState,
+  pushGraphicsState,
+  moveTo,
+  lineTo,
+  type PDFFont,
+} from "pdf-lib";
+import type { ImpositionPlan, ImpositionSlot } from "./imposition";
+import type { PageTransform, ZinePage } from "../types";
+import { getImage } from "./db";
+
+const MM_TO_PT = 2.8346456693;
+const A5_WIDTH = 148 * MM_TO_PT;
+const A5_HEIGHT = 210 * MM_TO_PT;
+const A4_WIDTH = A5_WIDTH * 2;
+const A4_HEIGHT = A5_HEIGHT;
+const CROP_MARK_LEN = 3 * MM_TO_PT;
+const CROP_MARK_OFFSET = 1.5 * MM_TO_PT;
+
+async function embedImageForBlob(doc: PDFDocument, blob: Blob): Promise<PDFImage> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  if (blob.type === "image/png") {
+    return doc.embedPng(bytes);
+  }
+  // default to jpg for jpeg/other; pdf-lib will throw if truly incompatible
+  try {
+    return await doc.embedJpg(bytes);
+  } catch {
+    return await doc.embedPng(bytes);
+  }
+}
+
+function rotatedOrigin(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation: number,
+): { x: number; y: number } {
+  switch (rotation) {
+    case 90:
+      return { x: x + h, y };
+    case 180:
+      return { x: x + w, y: y + h };
+    case 270:
+      return { x, y: y + w };
+    default:
+      return { x, y };
+  }
+}
+
+function drawImageInSlot(
+  page: PDFPage,
+  image: PDFImage,
+  slotX: number,
+  slotY: number,
+  transform: PageTransform,
+  extraRotate180: boolean,
+) {
+  const totalRotation = ((transform.rotation + (extraRotate180 ? 180 : 0)) % 360) as
+    | 0
+    | 90
+    | 180
+    | 270;
+
+  const imgDims = image.scale(1);
+  const coverScale =
+    Math.max(A5_WIDTH / imgDims.width, A5_HEIGHT / imgDims.height) *
+    transform.scale;
+  const drawWidth = imgDims.width * coverScale;
+  const drawHeight = imgDims.height * coverScale;
+
+  // center of the image within the slot, based on normalized offset (0..1, 0.5 = centered)
+  const centerX = slotX + A5_WIDTH * transform.offsetX;
+  const centerY = slotY + A5_HEIGHT * (1 - transform.offsetY);
+
+  const targetX = centerX - drawWidth / 2;
+  const targetY = centerY - drawHeight / 2;
+
+  const { x, y } = rotatedOrigin(targetX, targetY, drawWidth, drawHeight, totalRotation);
+
+  page.drawRectangle({
+    x: slotX,
+    y: slotY,
+    width: A5_WIDTH,
+    height: A5_HEIGHT,
+    color: rgb(0.95, 0.95, 0.95),
+  });
+
+  // Clip to the slot rectangle before drawing the image so overflow from
+  // scale/offset is hidden rather than bleeding into the neighboring slot.
+  page.pushOperators(
+    pushGraphicsState(),
+    moveTo(slotX, slotY),
+    lineTo(slotX + A5_WIDTH, slotY),
+    lineTo(slotX + A5_WIDTH, slotY + A5_HEIGHT),
+    lineTo(slotX, slotY + A5_HEIGHT),
+    clip(),
+    endPath(),
+  );
+
+  page.drawImage(image, {
+    x,
+    y,
+    width: drawWidth,
+    height: drawHeight,
+    rotate: degrees(totalRotation),
+  });
+
+  page.pushOperators(popGraphicsState());
+}
+
+function drawFoldAndCropMarks(page: PDFPage) {
+  const midX = A4_WIDTH / 2;
+  // dashed fold line down the center
+  page.drawLine({
+    start: { x: midX, y: 0 },
+    end: { x: midX, y: A4_HEIGHT },
+    thickness: 0.5,
+    color: rgb(0.6, 0.6, 0.6),
+    dashArray: [4, 4],
+  });
+  // corner crop marks
+  const corners = [
+    { x: 0, y: 0 },
+    { x: A4_WIDTH, y: 0 },
+    { x: 0, y: A4_HEIGHT },
+    { x: A4_WIDTH, y: A4_HEIGHT },
+  ];
+  for (const c of corners) {
+    const dx = c.x === 0 ? 1 : -1;
+    const dy = c.y === 0 ? 1 : -1;
+    page.drawLine({
+      start: { x: c.x + dx * CROP_MARK_OFFSET, y: c.y },
+      end: { x: c.x + dx * (CROP_MARK_OFFSET + CROP_MARK_LEN), y: c.y },
+      thickness: 0.5,
+      color: rgb(0.3, 0.3, 0.3),
+    });
+    page.drawLine({
+      start: { x: c.x, y: c.y + dy * CROP_MARK_OFFSET },
+      end: { x: c.x, y: c.y + dy * (CROP_MARK_OFFSET + CROP_MARK_LEN) },
+      thickness: 0.5,
+      color: rgb(0.3, 0.3, 0.3),
+    });
+  }
+}
+
+async function buildSideDocument(
+  slots: ImpositionSlot[],
+  pagesByNumber: Map<number, ZinePage>,
+  font: PDFFont | null,
+): Promise<PDFDocument> {
+  const doc = await PDFDocument.create();
+
+  for (const slot of slots) {
+    const page = doc.addPage([A4_WIDTH, A4_HEIGHT]);
+    drawFoldAndCropMarks(page);
+
+    for (const [pageNumber, x] of [
+      [slot.left, 0],
+      [slot.right, A5_WIDTH],
+    ] as const) {
+      if (pageNumber == null) continue;
+      const zinePage = pagesByNumber.get(pageNumber);
+      if (!zinePage?.imageId) {
+        if (font) {
+          page.drawText(`p.${pageNumber} (empty)`, {
+            x: x + 10,
+            y: A4_HEIGHT / 2,
+            size: 8,
+            font,
+            color: rgb(0.7, 0.7, 0.7),
+          });
+        }
+        continue;
+      }
+      const blob = await getImage(zinePage.imageId);
+      if (!blob) continue;
+      const image = await embedImageForBlob(doc, blob);
+      drawImageInSlot(page, image, x, 0, zinePage.transform, slot.rotate180);
+    }
+  }
+
+  return doc;
+}
+
+export interface ExportResult {
+  sideA: Blob;
+  sideB: Blob;
+  sheetCount: number;
+}
+
+export async function exportZinePdfs(
+  plan: ImpositionPlan,
+  pages: ZinePage[],
+): Promise<ExportResult> {
+  const pagesByNumber = new Map(pages.map((p) => [p.pageNumber, p]));
+
+  const sideADoc = await buildSideDocument(plan.sideA, pagesByNumber, null);
+  const sideBDoc = await buildSideDocument(plan.sideB, pagesByNumber, null);
+
+  const [sideABytes, sideBBytes] = await Promise.all([
+    sideADoc.save(),
+    sideBDoc.save(),
+  ]);
+
+  return {
+    sideA: new Blob([sideABytes as BlobPart], { type: "application/pdf" }),
+    sideB: new Blob([sideBBytes as BlobPart], { type: "application/pdf" }),
+    sheetCount: plan.sheetCount,
+  };
+}
