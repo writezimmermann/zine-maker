@@ -322,14 +322,26 @@ export default function Editor({ zineId, onBack }: Props) {
             ? `${zine.pageCount / 4} A4 sheets, printed landscape, double-sided in a single pass.`
             : `${zine.pageCount / 4} A4 sheets, printed landscape, single-sided in two passes.`}
         </p>
-        <label className="duplex-toggle">
-          <input
-            type="checkbox"
-            checked={duplex}
-            onChange={(e) => setDuplex(e.target.checked)}
-          />{" "}
-          My printer supports duplex (double-sided) printing
-        </label>
+        <div className="flip-toggle">
+          <label>
+            <input
+              type="radio"
+              name="printer-mode"
+              checked={!duplex}
+              onChange={() => setDuplex(false)}
+            />{" "}
+            Single-sided printer (manual flip)
+          </label>
+          <label>
+            <input
+              type="radio"
+              name="printer-mode"
+              checked={duplex}
+              onChange={() => setDuplex(true)}
+            />{" "}
+            Duplex printer (double-sided)
+          </label>
+        </div>
         <div className="flip-toggle">
           <label>
             <input
