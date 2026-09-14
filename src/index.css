@@ -432,3 +432,11 @@ button {
   font-size: 13px;
   align-items: center;
 }
+
+.duplex-toggle {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+  margin: 12px 0;
+}
