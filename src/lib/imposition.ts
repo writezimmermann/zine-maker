@@ -115,28 +115,36 @@ function applyBackTransform(slot: ImpositionSlot, flipMethod: FlipMethod): Impos
  * Transforms a sheet's raw "inner" (back) content for a true hardware
  * duplex (auto double-sided) print.
  *
- * This is deliberately the OPPOSITE mapping of applyBackTransform above.
  * Our sheets are authored as landscape pages (wider than tall — two
  * portrait A5 slots side by side), and a printer driver's "Flip on Long
  * Edge" / "Flip on Short Edge" duplex setting refers to the physical A4
  * sheet's long/short edge, not the logical orientation of the content on
- * it. For a landscape page, that physical binding-edge choice produces the
- * OPPOSITE visual result you'd get on a portrait page: selecting "Long
- * Edge" duplex physically flips a landscape sheet top-to-bottom (like a
- * calendar), and "Short Edge" flips it side-to-side (like a book) — the
- * reverse of what those labels mean for portrait content, and the reverse
- * of the by-hand flip in applyBackTransform.
+ * it. For a landscape page, that physical binding-edge choice produces a
+ * different visual result than it would on a portrait page, and — per an
+ * actual physical test print — "Flip on Long Edge" (this app's default
+ * duplex flip method) requires a FULL 180-degree rotation of the entire
+ * back page: both which slot (left/right) each page's content lands in,
+ * AND each image's own orientation, need to flip together, as if the
+ * whole printed back page were spun 180 degrees around its center.
  *
- * Confirmed by an actual physical test print: with the driver set to
- * "Flip on Long Edge" (this app's default duplex flip method), the back
- * side came out upside down relative to the front, which is exactly what
- * this mapping corrects for.
+ * This was found in two steps from real print tests: an earlier fix
+ * corrected only the per-image rotation (content was upside down, now
+ * right-side up), but left the left/right slot assignment untouched —
+ * which turned out to still put the wrong page next to the cover. Adding
+ * the left/right swap on top of the rotation (this version) additionally
+ * fixes that, since the two are independent: rotating an image in place
+ * doesn't change which slot it's drawn into, and vice versa.
+ *
+ * "Flip on Short Edge" duplex has not yet been physically tested — for
+ * now this leaves it as a straight pass-through (no swap, no rotation), the
+ * remaining untried option of the four possible combinations. If you test
+ * short-edge duplex and it's wrong, that's the thing to revisit.
  */
 function applyDuplexBackTransform(slot: ImpositionSlot, flipMethod: FlipMethod): ImpositionSlot {
   if (flipMethod === "long-edge") {
-    return { ...slot, rotate180: true };
+    return { ...slot, left: slot.right, right: slot.left, rotate180: true };
   }
-  return { ...slot, left: slot.right, right: slot.left };
+  return slot;
 }
 
 export function computeImposition(
