@@ -29,15 +29,18 @@ const IMAGE_MARGIN_MM = 10;
 const IMAGE_MARGIN = IMAGE_MARGIN_MM * MM_TO_PT;
 
 async function embedImageForBlob(doc: PDFDocument, blob: Blob): Promise<PDFImage> {
-  // Belt-and-suspenders: normalize orientation again here, at export time.
-  // Images uploaded before normalizeImageOrientation() existed (or from any
-  // other path that stored raw bytes) still carry an EXIF orientation tag
-  // that pdf-lib itself never reads/respects — only the browser's own
-  // decoders (img/canvas/ImageBitmap) do. Re-running the same canvas-based
-  // normalization here guarantees pdf-lib always receives already-upright,
-  // tag-free pixels, regardless of when/how the image entered storage. This
-  // is idempotent: an already-normalized image has no orientation tag, so
-  // it round-trips through the canvas unchanged.
+  // Belt-and-suspenders: normalize orientation (and cap resolution) again
+  // here, at export time. Images uploaded before normalizeImageOrientation()
+  // existed — or before it also downsampled — still carry an EXIF
+  // orientation tag and/or full camera resolution that this step corrects.
+  // pdf-lib itself never reads/respects EXIF orientation (only the
+  // browser's own decoders do), and embedding a photo at its original
+  // multi-megapixel size wastes space no A5-printed page could ever
+  // resolve. Re-running the same canvas-based normalization here
+  // guarantees pdf-lib always receives already-upright, print-appropriately
+  // sized, tag-free pixels, regardless of when/how the image entered
+  // storage. This is idempotent: an already-normalized image round-trips
+  // through the canvas unchanged (aside from JPEG re-encoding).
   blob = await normalizeImageOrientation(blob);
   const bytes = new Uint8Array(await blob.arrayBuffer());
   if (blob.type === "image/png") {
