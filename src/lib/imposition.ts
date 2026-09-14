@@ -88,22 +88,55 @@ function rawSlotsForSheet(n: number, s: number): { front: ImpositionSlot; backRa
 /**
  * Transforms a sheet's raw "inner" (back) content into what actually needs
  * to be printed on the reverse of that same physical sheet, so it lines up
- * once the sheet is flipped — whether that flip is done automatically by a
- * duplex printer or manually by the person printing.
+ * once the *person* manually flips the printed stack over by hand.
  *
- * "long-edge" flip (turning the sheet over sideways, like a page in a
- * book): what was on the left is now on the right relative to the
+ * This is for the manual two-pass flow only (see computeImposition) — the
+ * physical action described to the user in the instructions:
+ *
+ * "long-edge" flip (turning the whole stack over sideways, like a page in
+ * a book): what was on the left is now on the right relative to the
  * printer's feed, so left/right are swapped.
  *
- * "short-edge" flip (turning the sheet over top-to-bottom, like flipping a
+ * "short-edge" flip (turning the stack over top-to-bottom, like flipping a
  * desk calendar page): the sheet ends up upside down relative to the
  * front, so the content is rotated 180 degrees.
+ *
+ * True hardware duplex uses a different mapping — see
+ * applyDuplexBackTransform below for why.
  */
 function applyBackTransform(slot: ImpositionSlot, flipMethod: FlipMethod): ImpositionSlot {
   if (flipMethod === "long-edge") {
     return { ...slot, left: slot.right, right: slot.left };
   }
   return { ...slot, rotate180: true };
+}
+
+/**
+ * Transforms a sheet's raw "inner" (back) content for a true hardware
+ * duplex (auto double-sided) print.
+ *
+ * This is deliberately the OPPOSITE mapping of applyBackTransform above.
+ * Our sheets are authored as landscape pages (wider than tall — two
+ * portrait A5 slots side by side), and a printer driver's "Flip on Long
+ * Edge" / "Flip on Short Edge" duplex setting refers to the physical A4
+ * sheet's long/short edge, not the logical orientation of the content on
+ * it. For a landscape page, that physical binding-edge choice produces the
+ * OPPOSITE visual result you'd get on a portrait page: selecting "Long
+ * Edge" duplex physically flips a landscape sheet top-to-bottom (like a
+ * calendar), and "Short Edge" flips it side-to-side (like a book) — the
+ * reverse of what those labels mean for portrait content, and the reverse
+ * of the by-hand flip in applyBackTransform.
+ *
+ * Confirmed by an actual physical test print: with the driver set to
+ * "Flip on Long Edge" (this app's default duplex flip method), the back
+ * side came out upside down relative to the front, which is exactly what
+ * this mapping corrects for.
+ */
+function applyDuplexBackTransform(slot: ImpositionSlot, flipMethod: FlipMethod): ImpositionSlot {
+  if (flipMethod === "long-edge") {
+    return { ...slot, rotate180: true };
+  }
+  return { ...slot, left: slot.right, right: slot.left };
 }
 
 export function computeImposition(
@@ -126,8 +159,9 @@ export function computeImposition(
   // flipped over *as a whole block* and re-fed. Unlike a single sheet being
   // duplexed automatically, flipping an entire stack over also reverses
   // which sheet ends up on top — so for "long-edge" we additionally
-  // reverse the sheet order (the per-sheet content transform is the same
-  // one used for true duplex, see applyBackTransform).
+  // reverse the sheet order (the per-sheet content transform is
+  // applyBackTransform, for this by-hand flip specifically — true hardware
+  // duplex uses a different mapping, see applyDuplexBackTransform).
   const sideB: ImpositionSlot[] =
     flipMethod === "long-edge"
       ? [...sideBRaw].reverse().map((slot) => applyBackTransform(slot, flipMethod))
@@ -159,8 +193,9 @@ export function computeImposition(
  * Imposition for a true duplex (auto double-sided) printer: one sheet is
  * fed once and the printer prints and flips it itself, so — unlike the
  * manual two-pass flow above — sheets stay in straight 1..sheetCount order.
- * Only the front/back content transform (which edge the flip happens on)
- * carries over from the manual case.
+ * The front/back content transform uses applyDuplexBackTransform, NOT
+ * applyBackTransform — see that function for why hardware duplex needs a
+ * different (opposite) mapping than the by-hand flip does.
  */
 export function computeDuplexImposition(
   pageCount: number,
@@ -175,7 +210,7 @@ export function computeDuplexImposition(
     sheets.push({
       sheetNumber: s,
       front,
-      back: applyBackTransform(backRaw, flipMethod),
+      back: applyDuplexBackTransform(backRaw, flipMethod),
     });
   }
 
