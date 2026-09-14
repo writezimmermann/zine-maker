@@ -431,4 +431,6 @@ button {
   gap: 8px;
   font-size: 13px;
   align-items: center;
+  margin: 12px 0;
 }
+

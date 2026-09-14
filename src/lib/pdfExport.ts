@@ -12,7 +12,7 @@ import {
   lineTo,
   type PDFFont,
 } from "pdf-lib";
-import type { ImpositionPlan, ImpositionSlot } from "./imposition";
+import type { DuplexImpositionPlan, ImpositionPlan, ImpositionSlot } from "./imposition";
 import type { PageTransform, ZinePage } from "../types";
 import { getImage } from "./db";
 import { normalizeImageOrientation } from "./normalizeImage";
@@ -188,42 +188,51 @@ function drawFoldAndCropMarks(page: PDFPage) {
   }
 }
 
+async function drawSlotOntoNewPage(
+  doc: PDFDocument,
+  slot: ImpositionSlot,
+  pagesByNumber: Map<number, ZinePage>,
+  font: PDFFont | null,
+): Promise<PDFPage> {
+  const page = doc.addPage([A4_WIDTH, A4_HEIGHT]);
+  drawFoldAndCropMarks(page);
+
+  for (const [pageNumber, x] of [
+    [slot.left, 0],
+    [slot.right, A5_WIDTH],
+  ] as const) {
+    if (pageNumber == null) continue;
+    const zinePage = pagesByNumber.get(pageNumber);
+    if (!zinePage?.imageId) {
+      if (font) {
+        page.drawText(`p.${pageNumber} (empty)`, {
+          x: x + 10,
+          y: A4_HEIGHT / 2,
+          size: 8,
+          font,
+          color: rgb(0.7, 0.7, 0.7),
+        });
+      }
+      continue;
+    }
+    const blob = await getImage(zinePage.imageId);
+    if (!blob) continue;
+    const image = await embedImageForBlob(doc, blob);
+    drawImageInSlot(page, image, x, 0, zinePage.transform, slot.rotate180);
+  }
+
+  return page;
+}
+
 async function buildSideDocument(
   slots: ImpositionSlot[],
   pagesByNumber: Map<number, ZinePage>,
   font: PDFFont | null,
 ): Promise<PDFDocument> {
   const doc = await PDFDocument.create();
-
   for (const slot of slots) {
-    const page = doc.addPage([A4_WIDTH, A4_HEIGHT]);
-    drawFoldAndCropMarks(page);
-
-    for (const [pageNumber, x] of [
-      [slot.left, 0],
-      [slot.right, A5_WIDTH],
-    ] as const) {
-      if (pageNumber == null) continue;
-      const zinePage = pagesByNumber.get(pageNumber);
-      if (!zinePage?.imageId) {
-        if (font) {
-          page.drawText(`p.${pageNumber} (empty)`, {
-            x: x + 10,
-            y: A4_HEIGHT / 2,
-            size: 8,
-            font,
-            color: rgb(0.7, 0.7, 0.7),
-          });
-        }
-        continue;
-      }
-      const blob = await getImage(zinePage.imageId);
-      if (!blob) continue;
-      const image = await embedImageForBlob(doc, blob);
-      drawImageInSlot(page, image, x, 0, zinePage.transform, slot.rotate180);
-    }
+    await drawSlotOntoNewPage(doc, slot, pagesByNumber, font);
   }
-
   return doc;
 }
 
@@ -250,6 +259,37 @@ export async function exportZinePdfs(
   return {
     sideA: new Blob([sideABytes as BlobPart], { type: "application/pdf" }),
     sideB: new Blob([sideBBytes as BlobPart], { type: "application/pdf" }),
+    sheetCount: plan.sheetCount,
+  };
+}
+
+export interface DuplexExportResult {
+  /** Single PDF: front, back, front, back… one pair per physical sheet. */
+  duplex: Blob;
+  sheetCount: number;
+}
+
+/**
+ * Builds one combined PDF for true duplex (auto double-sided) printers:
+ * each sheet's front page is immediately followed by its back page, so
+ * the OS/printer's native duplex handling pairs them up correctly in a
+ * single print pass — no manual stack-flipping needed.
+ */
+export async function exportZineDuplexPdf(
+  plan: DuplexImpositionPlan,
+  pages: ZinePage[],
+): Promise<DuplexExportResult> {
+  const pagesByNumber = new Map(pages.map((p) => [p.pageNumber, p]));
+  const doc = await PDFDocument.create();
+
+  for (const sheet of plan.sheets) {
+    await drawSlotOntoNewPage(doc, sheet.front, pagesByNumber, null);
+    await drawSlotOntoNewPage(doc, sheet.back, pagesByNumber, null);
+  }
+
+  const bytes = await doc.save();
+  return {
+    duplex: new Blob([bytes as BlobPart], { type: "application/pdf" }),
     sheetCount: plan.sheetCount,
   };
 }

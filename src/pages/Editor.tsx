@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PageTransform, ZinePage, ZineRecord } from "../types";
 import { getImage, getZine, saveImage, saveZine } from "../lib/db";
 import uuid from "../lib/id";
-import { computeImposition, type FlipMethod } from "../lib/imposition";
-import { exportZinePdfs } from "../lib/pdfExport";
+import { computeDuplexImposition, computeImposition, type FlipMethod } from "../lib/imposition";
+import { exportZineDuplexPdf, exportZinePdfs } from "../lib/pdfExport";
 import { normalizeImageOrientation } from "../lib/normalizeImage";
 
 interface Props {
@@ -192,6 +192,7 @@ export default function Editor({ zineId, onBack }: Props) {
   const [zine, setZine] = useState<ZineRecord | null>(null);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [flipMethod, setFlipMethod] = useState<FlipMethod>("long-edge");
+  const [duplex, setDuplex] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
@@ -256,10 +257,16 @@ export default function Editor({ zineId, onBack }: Props) {
     if (!zine) return;
     setExporting(true);
     try {
-      const plan = computeImposition(zine.pageCount, flipMethod);
-      const result = await exportZinePdfs(plan, zine.pages);
-      downloadBlob(result.sideA, `${zine.title} - Side A.pdf`);
-      downloadBlob(result.sideB, `${zine.title} - Side B.pdf`);
+      if (duplex) {
+        const plan = computeDuplexImposition(zine.pageCount, flipMethod);
+        const result = await exportZineDuplexPdf(plan, zine.pages);
+        downloadBlob(result.duplex, `${zine.title} - Duplex.pdf`);
+      } else {
+        const plan = computeImposition(zine.pageCount, flipMethod);
+        const result = await exportZinePdfs(plan, zine.pages);
+        downloadBlob(result.sideA, `${zine.title} - Side A.pdf`);
+        downloadBlob(result.sideB, `${zine.title} - Side B.pdf`);
+      }
     } finally {
       setExporting(false);
     }
@@ -311,9 +318,30 @@ export default function Editor({ zineId, onBack }: Props) {
       <div className="export-panel">
         <h3>Print & fold</h3>
         <p className="zine-meta">
-          {zine.pageCount / 4} A4 sheets, printed landscape, single-sided in two
-          passes.
+          {duplex
+            ? `${zine.pageCount / 4} A4 sheets, printed landscape, double-sided in a single pass.`
+            : `${zine.pageCount / 4} A4 sheets, printed landscape, single-sided in two passes.`}
         </p>
+        <div className="flip-toggle">
+          <label>
+            <input
+              type="radio"
+              name="printer-mode"
+              checked={!duplex}
+              onChange={() => setDuplex(false)}
+            />{" "}
+            Single-sided printer (manual flip)
+          </label>
+          <label>
+            <input
+              type="radio"
+              name="printer-mode"
+              checked={duplex}
+              onChange={() => setDuplex(true)}
+            />{" "}
+            Duplex printer (double-sided)
+          </label>
+        </div>
         <div className="flip-toggle">
           <label>
             <input
@@ -321,7 +349,9 @@ export default function Editor({ zineId, onBack }: Props) {
               checked={flipMethod === "long-edge"}
               onChange={() => setFlipMethod("long-edge")}
             />{" "}
-            Flip along long edge (like turning a book page)
+            {duplex
+              ? "Duplex setting: Flip on Long Edge (like a book)"
+              : "Flip along long edge (like turning a book page)"}
           </label>
           <label>
             <input
@@ -329,19 +359,26 @@ export default function Editor({ zineId, onBack }: Props) {
               checked={flipMethod === "short-edge"}
               onChange={() => setFlipMethod("short-edge")}
             />{" "}
-            Flip top-to-bottom (like a calendar)
+            {duplex
+              ? "Duplex setting: Flip on Short Edge (like a calendar)"
+              : "Flip top-to-bottom (like a calendar)"}
           </label>
         </div>
         <ol>
-          {computeImposition(zine.pageCount, flipMethod).instructions.map(
-            (line, i) => (
-              <li key={i}>{line}</li>
-            ),
-          )}
+          {(duplex
+            ? computeDuplexImposition(zine.pageCount, flipMethod).instructions
+            : computeImposition(zine.pageCount, flipMethod).instructions
+          ).map((line, i) => (
+            <li key={i}>{line}</li>
+          ))}
         </ol>
         <div className="export-actions">
           <button className="primary-btn" onClick={handleExport} disabled={exporting}>
-            {exporting ? "Generating…" : "Export Side A & Side B PDFs"}
+            {exporting
+              ? "Generating…"
+              : duplex
+                ? "Export Duplex PDF"
+                : "Export Side A & Side B PDFs"}
           </button>
         </div>
       </div>
