@@ -265,6 +265,9 @@ export default function Editor({ zineId, onBack }: Props) {
         const plan = computeImposition(zine.pageCount, flipMethod);
         const result = await exportZinePdfs(plan, zine.pages);
         downloadBlob(result.sideA, `${zine.title} - Side A.pdf`);
+        // Browsers (notably Safari) drop all but the last of several
+        // programmatic downloads fired in the same tick — space them out.
+        await new Promise((resolve) => setTimeout(resolve, 800));
         downloadBlob(result.sideB, `${zine.title} - Side B.pdf`);
       }
     } finally {
